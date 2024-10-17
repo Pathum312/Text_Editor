@@ -11,7 +11,7 @@ int main()
 {
     User person = { "Pathum Senanyake", 22, "pathumsenanayake@proton.me" };
 
-    printf("Name: %s\n Age: %d\nEmail: %s", person.name, person.age, person.email);
+    printf("Name: %s\nAge: %d\nEmail: %s", person.name, person.age, person.email);
 
     return 0;
 }
