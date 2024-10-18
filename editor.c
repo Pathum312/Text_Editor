@@ -4,35 +4,39 @@
 #include <ctype.h>
 #include <unistd.h>
 
+/*** Defines ***/
+#define CTRL_KEY(k) ((k) & 0x1f)
+
 /*** Data ***/
 HANDLE hStdin;
 DWORD originalMode;
+typedef struct
+{
+    int Rows;
+    int Columns;
+} WindowSize;
+
 
 /*** Prototypes ***/
 void EnableRawMode();
+char EditorReadKey();
 void DisableRawMode();
+void EditorDrawRows();
+void EditorRefreshScreen();
+WindowSize* GetWindowSize();
+void EditorProcessKeypress();
 void Die( const char* message );
 
 /*** Init ***/
 int main()
 {
-    EnableRawMode();
-
-    char c;
+    EnableRawMode(); // Disables certain terminal behaviours
 
     while (1)
     {
-        // If the char is the EOF, then exit.
-        if (read( STDIN_FILENO , &c , 1 ) == -1 && errno != EAGAIN) Die( "Read" );
-
-        /*
-            If the entered char is not a control char,
-            then display that keypress.
-        */
-        !iscntrl( c ) ? printf( "%c\r\n" , c ) : printf( "%d (%c)\r\n" , c , c );
-
-        // If the char is q, exit the editor.
-        if (c == 'q') break;
+        EditorRefreshScreen(); // Refresh terminal window
+        EditorDrawRows(); // Draw ~ for all the rows in the terminal window
+        EditorProcessKeypress(); // Process each keypress, the user has registered
     }
 
     return 0;
@@ -72,6 +76,83 @@ void DisableRawMode()
 
 void Die( const char* message )
 {
+    EditorRefreshScreen();
+
     perror( message );
     exit( 1 );
+}
+
+char EditorReadKey()
+{
+    int nread;
+    char c;
+
+    // Save all keypresses tp the char c, if not char is entered exit
+    while (( nread = read( STDIN_FILENO , &c , 1 ) ) != 1)
+    {
+        if (nread != 1 && errno != EAGAIN) Die( "Read" );
+    }
+
+    return c;
+}
+
+WindowSize* GetWindowSize()
+{
+    // Handle to the console output
+    HANDLE hConsole = GetStdHandle( STD_OUTPUT_HANDLE );
+
+    // Object to hold console details
+    CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
+
+    WindowSize* pWindow;
+
+    if (GetConsoleScreenBufferInfo( hConsole , &consoleInfo ))
+    {
+        // Calculate terminal width and height
+        pWindow->Columns = consoleInfo.srWindow.Right - consoleInfo.srWindow.Left + 1;
+        pWindow->Rows = consoleInfo.srWindow.Bottom - consoleInfo.srWindow.Top + 1;
+    }
+
+    return pWindow;
+}
+
+/*** Input ***/
+void EditorProcessKeypress()
+{
+    char c = EditorReadKey();
+
+    switch (c)
+    {
+        // If the Ctrl-Q is pressed, the editor will exit
+        case CTRL_KEY( 'q' ):
+            EditorRefreshScreen();
+
+            exit( 0 );
+            break;
+    }
+}
+
+/*** Output ***/
+void ResetCursor()
+{
+    // Positions the cursor to the top left
+    write( STDOUT_FILENO , "\x1b[H" , 3 );
+}
+
+void EditorRefreshScreen()
+{
+    write( STDOUT_FILENO , "\x1b[2J" , 4 );
+    ResetCursor();
+}
+
+void EditorDrawRows()
+{
+    WindowSize* pConsoleWindow = GetWindowSize();
+
+    int i;
+    for (i = 0; i < pConsoleWindow->Rows; i++)
+    {
+        write( STDOUT_FILENO , "~\r\n" , 3 );
+    }
+    ResetCursor();
 }
