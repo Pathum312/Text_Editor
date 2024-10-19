@@ -31,7 +31,7 @@ typedef struct
 
 HANDLE hStdin;
 StrBuffer* sb;
-Cursor cursor; // Update to direct structure
+Cursor cursor;
 DWORD originalMode;
 
 /*** Prototypes ***/
