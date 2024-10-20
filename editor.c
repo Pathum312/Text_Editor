@@ -29,6 +29,14 @@ typedef struct
     int y;
 } Cursor;
 
+enum editorKey
+{
+    ARROW_LEFT = 1000 ,
+    ARROW_RIGHT ,
+    ARROW_UP ,
+    ARROW_DOWN
+};
+
 HANDLE hStdin;
 StrBuffer* sb;
 Cursor cursor;
@@ -36,8 +44,8 @@ DWORD originalMode;
 
 /*** Prototypes ***/
 void EditorInit();
+int EditorReadKey();
 void EnableRawMode();
-char EditorReadKey();
 void DisableRawMode();
 void EditorDrawRows();
 void MoveCursor( int key );
@@ -111,18 +119,26 @@ void Die( const char* message )
     exit( 1 );
 }
 
-char EditorReadKey()
+int EditorReadKey()
 {
-    int nread;
-    char c;
+    INPUT_RECORD inputRecord;
+    DWORD events;
 
-    // Save all keypresses to the char c, if no char is entered exit
-    while (( nread = read( STDIN_FILENO , &c , 1 ) ) != 1)
+    while (1)
     {
-        if (nread != 1 && errno != EAGAIN) Die( "Read" );
+        ReadConsoleInput( hStdin , &inputRecord , 1 , &events );
+        if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown)
+        {
+            switch (inputRecord.Event.KeyEvent.wVirtualKeyCode)
+            {
+                case VK_LEFT: return ARROW_LEFT;
+                case VK_RIGHT: return ARROW_RIGHT;
+                case VK_UP: return ARROW_UP;
+                case VK_DOWN: return ARROW_DOWN;
+                default: return inputRecord.Event.KeyEvent.uChar.AsciiChar;
+            }
+        }
     }
-
-    return c;
 }
 
 WindowSize* GetWindowSize()
@@ -148,17 +164,18 @@ WindowSize* GetWindowSize()
 /*** Input ***/
 void EditorProcessKeypress()
 {
-    char c = EditorReadKey();
+    int c = EditorReadKey();
     switch (c)
     {
         case CTRL_KEY( 'q' ):
             EditorRefreshScreen();
             exit( 0 );
             break;
-        case 'w':
-        case 'a':
-        case 's':
-        case 'd':
+
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
             MoveCursor( c ); // Handle movement
             break;
     }
@@ -267,16 +284,16 @@ void MoveCursor( int key )
 {
     switch (key)
     {
-        case 'w':
+        case ARROW_UP:
             if (cursor.y > 0) cursor.y--;
             break;
-        case 's':
+        case ARROW_DOWN:
             cursor.y++;
             break;
-        case 'a':
+        case ARROW_LEFT:
             if (cursor.x > 0) cursor.x--;
             break;
-        case 'd':
+        case ARROW_RIGHT:
             cursor.x++;
             break;
     }
