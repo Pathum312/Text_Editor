@@ -37,7 +37,9 @@ enum editorKey
     ARROW_LEFT = 1000 ,
     ARROW_RIGHT ,
     ARROW_UP ,
-    ARROW_DOWN
+    ARROW_DOWN ,
+    PAGE_UP ,
+    PAGE_DOWN
 };
 
 /*** Global Variables ***/
@@ -131,6 +133,8 @@ int ReadKeyInput()
                 case VK_RIGHT: return ARROW_RIGHT;
                 case VK_UP: return ARROW_UP;
                 case VK_DOWN: return ARROW_DOWN;
+                case VK_PRIOR: return PAGE_UP;
+                case VK_NEXT: return PAGE_DOWN;
                 default: return inputRecord.Event.KeyEvent.uChar.AsciiChar;
             }
         }
@@ -161,6 +165,11 @@ void ProcessKeypress()
         case CTRL_KEY( 'q' ):
             RefreshEditorScreen();
             exit( 0 ); // Exit on Ctrl-Q
+            break;
+
+        case PAGE_UP:
+        case PAGE_DOWN:
+            PageUPAndDownMovement( key );
             break;
 
         case ARROW_UP:
@@ -280,6 +289,19 @@ void MoveCursor( int key )
         case ARROW_RIGHT:
             if (cursor.x < terminalSize->columns - 1) cursor.x++;
             break;
+    }
+}
+
+void PageUPAndDownMovement( int key )
+{
+    WindowSize* terminalSize = GetTerminalSize();
+
+    int rows = terminalSize->rows;
+
+    // Loop through
+    while (rows--)
+    {
+        MoveCursor( key == PAGE_UP ? ARROW_UP : ARROW_DOWN );
     }
 }
 
