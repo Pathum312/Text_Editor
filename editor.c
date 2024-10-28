@@ -5,30 +5,33 @@
 #include <windows.h>
 #include <conio.h>
 
-/*** Defines ***/
+/*** Editor Version ***/
 #define EDITOR_VERSION "0.1.0"
-#define CTRL_KEY(k) ((k) & 0x1f)
-#define STR_BUFFER_INIT {NULL, 0}
 
-/*** Data ***/
+/*** Macros for Key Handling ***/
+#define CTRL_KEY(k) ((k) & 0x1f) // Mask to identify Ctrl + key combinations
+#define STR_BUFFER_INIT {NULL, 0} // Initial empty buffer configuration
+
+/*** Structs ***/
 typedef struct
 {
-    int Rows;
-    int Columns;
+    int rows;    // Terminal rows
+    int columns; // Terminal columns
 } WindowSize;
 
 typedef struct
 {
-    char* b;
-    int len;
-} StrBuffer;
+    char* buffer; // Dynamic character buffer
+    int length;   // Length of the current buffer
+} StringBuffer;
 
 typedef struct
 {
-    int x;
-    int y;
-} Cursor;
+    int x; // Cursor position on the x-axis
+    int y; // Cursor position on the y-axis
+} CursorPosition;
 
+/*** Key Definitions for Editor Navigation ***/
 enum editorKey
 {
     ARROW_LEFT = 1000 ,
@@ -37,96 +40,89 @@ enum editorKey
     ARROW_DOWN
 };
 
-HANDLE hStdin;
-StrBuffer* sb;
-Cursor cursor;
-DWORD originalMode;
+/*** Global Variables ***/
+HANDLE inputHandle;
+StringBuffer* outputBuffer;
+CursorPosition cursor;
+DWORD originalConsoleMode;
 
-/*** Prototypes ***/
-void EditorInit();
-int EditorReadKey();
-void EnableRawMode();
-void DisableRawMode();
-void EditorDrawRows();
+/*** Function Prototypes ***/
+void InitializeEditor();
+int ReadKeyInput();
+void EnableRawInputMode();
+void DisableRawInputMode();
+void DrawEditorRows();
 void MoveCursor( int key );
-void EditorRefreshScreen();
-void UpdateCursorPosition();
-WindowSize* GetWindowSize();
-void EditorProcessKeypress();
-void SBFree( StrBuffer* sb );
-void Die( const char* message );
-void SBAppend( StrBuffer* sb , const char* s , int len );
+void RefreshEditorScreen();
+void UpdateCursor();
+WindowSize* GetTerminalSize();
+void ProcessKeypress();
+void FreeStringBuffer( StringBuffer* buffer );
+void HandleFatalError( const char* errorMessage );
+void AppendToStringBuffer( StringBuffer* buffer , const char* str , int length );
 
-/*** Init ***/
+/*** Editor Initialization ***/
 int main()
 {
-    EnableRawMode(); // Disables certain terminal behaviors
-    EditorInit(); // Initialize default editor settings
+    EnableRawInputMode(); // Enables raw mode to disable typical terminal behavior
+    InitializeEditor();   // Sets initial editor state, e.g., cursor position
 
     while (1)
     {
-        EditorRefreshScreen(); // Refresh terminal window
-        EditorProcessKeypress(); // Process each keypress, the user has registered
+        RefreshEditorScreen(); // Update display
+        ProcessKeypress();     // Handle key input from the user
     }
 
     return 0;
 }
 
-void EditorInit()
+void InitializeEditor()
 {
-    // Initialize cursor position
+    // Start cursor at the top-left corner
     cursor.x = 0;
     cursor.y = 0;
 }
 
-/*** Terminal ***/
-void EnableRawMode()
+/*** Terminal Input Handling ***/
+void EnableRawInputMode()
 {
-    hStdin = GetStdHandle( STD_INPUT_HANDLE );
-    DWORD newMode;
+    inputHandle = GetStdHandle( STD_INPUT_HANDLE );
+    DWORD newConsoleMode;
 
-    // Current console mode
-    GetConsoleMode( hStdin , &originalMode );
+    // Save the original console mode for restoration
+    GetConsoleMode( inputHandle , &originalConsoleMode );
+    atexit( DisableRawInputMode ); // Ensure raw mode is disabled on exit
 
-    // At exit, disable raw mode
-    atexit( DisableRawMode );
+    newConsoleMode = originalConsoleMode;
 
-    // Copy the default console mode to modify that
-    newMode = originalMode;
+    // Configure raw mode by disabling console features
+    newConsoleMode &= ~( ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_PROCESSED_OUTPUT );
 
-    // Turn off ECHO mode
-    // Turn off Canonical mode
-    // Turn off Ctrl-Z and Ctrl-C
-    newMode &= ~( ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT );
-    // Turn off Ctrl-S and Ctrl-Q
-    newMode &= ~( ENABLE_PROCESSED_OUTPUT );
-
-    // Change the current mode with the new configuration
-    if (!SetConsoleMode( hStdin , newMode )) Die( "Enable" );
+    // Apply the new console mode
+    if (!SetConsoleMode( inputHandle , newConsoleMode )) HandleFatalError( "EnableRawInputMode" );
 }
 
-void DisableRawMode()
+void DisableRawInputMode()
 {
-    // Set the console to the default mode
-    if (!SetConsoleMode( hStdin , originalMode )) Die( "Disable" );
+    // Restore the original console mode
+    if (!SetConsoleMode( inputHandle , originalConsoleMode )) HandleFatalError( "DisableRawInputMode" );
 }
 
-void Die( const char* message )
+void HandleFatalError( const char* errorMessage )
 {
-    EditorRefreshScreen();
-
-    perror( message );
+    RefreshEditorScreen();
+    perror( errorMessage ); // Display error details
     exit( 1 );
 }
 
-int EditorReadKey()
+int ReadKeyInput()
 {
     INPUT_RECORD inputRecord;
-    DWORD events;
+    DWORD eventCount;
 
     while (1)
     {
-        ReadConsoleInput( hStdin , &inputRecord , 1 , &events );
+        ReadConsoleInput( inputHandle , &inputRecord , 1 , &eventCount );
         if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown)
         {
             switch (inputRecord.Event.KeyEvent.wVirtualKeyCode)
@@ -141,168 +137,155 @@ int EditorReadKey()
     }
 }
 
-WindowSize* GetWindowSize()
+WindowSize* GetTerminalSize()
 {
-    // Handle to the console output
-    HANDLE hConsole = GetStdHandle( STD_OUTPUT_HANDLE );
-
-    // Object to hold console details
+    HANDLE outputHandle = GetStdHandle( STD_OUTPUT_HANDLE );
     CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
+    WindowSize* terminalSize = (WindowSize*) malloc( sizeof( WindowSize ) );
 
-    WindowSize* pWindow = (WindowSize*) malloc( sizeof( WindowSize ) );
-
-    if (GetConsoleScreenBufferInfo( hConsole , &consoleInfo ))
+    if (GetConsoleScreenBufferInfo( outputHandle , &consoleInfo ))
     {
-        // Calculate terminal width and height
-        pWindow->Columns = consoleInfo.srWindow.Right - consoleInfo.srWindow.Left + 1;
-        pWindow->Rows = consoleInfo.srWindow.Bottom - consoleInfo.srWindow.Top + 1;
+        terminalSize->columns = consoleInfo.srWindow.Right - consoleInfo.srWindow.Left + 1;
+        terminalSize->rows = consoleInfo.srWindow.Bottom - consoleInfo.srWindow.Top + 1;
     }
 
-    return pWindow;
+    return terminalSize;
 }
 
-/*** Input ***/
-void EditorProcessKeypress()
+/*** Key Press Processing ***/
+void ProcessKeypress()
 {
-    int c = EditorReadKey();
-    switch (c)
+    int key = ReadKeyInput();
+    switch (key)
     {
         case CTRL_KEY( 'q' ):
-            EditorRefreshScreen();
-            exit( 0 );
+            RefreshEditorScreen();
+            exit( 0 ); // Exit on Ctrl-Q
             break;
 
         case ARROW_UP:
         case ARROW_DOWN:
         case ARROW_LEFT:
         case ARROW_RIGHT:
-            MoveCursor( c ); // Handle movement
+            MoveCursor( key ); // Adjust cursor position based on arrow key
             break;
     }
 }
 
-/*** String Buffer ***/
-void SBAppend( StrBuffer* sb , const char* s , int len )
+/*** Dynamic String Buffer Operations ***/
+void AppendToStringBuffer( StringBuffer* buffer , const char* str , int length )
 {
-    char* new = realloc( sb->b , sb->len + len );
+    char* newBuffer = realloc( buffer->buffer , buffer->length + length );
 
-    if (new == NULL) return;
+    if (newBuffer == NULL) return;
 
-    memcpy( &new[sb->len] , s , len );
-    sb->b = new;
-    sb->len += len;
+    memcpy( &newBuffer[buffer->length] , str , length );
+    buffer->buffer = newBuffer;
+    buffer->length += length;
 }
 
-void SBFree( StrBuffer* sb )
+void FreeStringBuffer( StringBuffer* buffer )
 {
-    free( sb->b );
+    free( buffer->buffer );
 }
 
-/*** Output ***/
-void ResetCursor()
+/*** Screen Rendering ***/
+void ResetCursorPosition()
 {
-    // Positions the cursor to the top left
-    SBAppend( sb , "\x1b[H" , 3 );
+    AppendToStringBuffer( outputBuffer , "\x1b[H" , 3 ); // Move cursor to top-left
 }
 
 void HideCursor()
 {
-    // Tell the terminal to hide the cursor
-    SBAppend( sb , "\x1b[?25h" , 6 );
+    AppendToStringBuffer( outputBuffer , "\x1b[?25h" , 6 ); // Make cursor invisible
 }
 
-void EditorRefreshScreen()
+void RefreshEditorScreen()
 {
-    StrBuffer buffer = STR_BUFFER_INIT;
-    sb = &buffer;
+    StringBuffer buffer = STR_BUFFER_INIT;
+    outputBuffer = &buffer;
 
-    HideCursor(); // Hide cursor when keys are pressed
-    ResetCursor(); // Move cursor to top left of the terminal
+    HideCursor();
+    ResetCursorPosition();
 
-    EditorDrawRows(); // Draw ~ for all the rows in the terminal window
+    DrawEditorRows(); // Render each row
 
-    ResetCursor();
+    ResetCursorPosition();
     HideCursor();
 
-    write( STDOUT_FILENO , sb->b , sb->len );
-    SBFree( sb );
+    write( STDOUT_FILENO , outputBuffer->buffer , outputBuffer->length );
+    FreeStringBuffer( outputBuffer );
 
-    UpdateCursorPosition(); // Update cursor position in the terminal
+    UpdateCursor(); // Update terminal cursor position
 }
 
-void EditorDrawRows()
+void DrawEditorRows()
 {
-    WindowSize* pConsoleWindow = GetWindowSize();
+    WindowSize* terminalSize = GetTerminalSize();
 
-    int i;
-    for (i = 0; i < pConsoleWindow->Rows; i++)
+    for (int i = 0; i < terminalSize->rows; i++)
     {
-        if (i == pConsoleWindow->Rows / 3)
+        if (i == terminalSize->rows / 3)
         {
-            char welcome[80]; // Welcome message
+            char welcome[80];
 
-            int welcomeLen = snprintf(
+            int welcomeLength = snprintf(
                 welcome ,
                 sizeof( welcome ) ,
                 "Pinkz Editor -- Version %s" ,
                 EDITOR_VERSION
             );
 
-            // Truncate the length of the welcome message if the window is too small
-            if (welcomeLen > pConsoleWindow->Columns) welcomeLen = pConsoleWindow->Columns;
+            if (welcomeLength > terminalSize->columns) welcomeLength = terminalSize->columns;
 
-            // Center the welcome message
-            int padding = ( pConsoleWindow->Columns - welcomeLen ) / 2;
+            int padding = ( terminalSize->columns - welcomeLength ) / 2;
 
-            // Print the first ~, before the padding
             if (padding)
             {
-                SBAppend( sb , "~" , 1 );
+                AppendToStringBuffer( outputBuffer , "~" , 1 );
                 padding--;
             }
 
-            // After the ~, add the padding to center the welcome message
-            while (padding--) SBAppend( sb , " " , 1 );
+            while (padding--) AppendToStringBuffer( outputBuffer , " " , 1 );
 
-            // Print the welcome message
-            SBAppend( sb , welcome , welcomeLen );
+            AppendToStringBuffer( outputBuffer , welcome , welcomeLength );
         }
         else
         {
-            SBAppend( sb , "~" , 1 ); // Print one row
-
+            AppendToStringBuffer( outputBuffer , "~" , 1 ); // Add filler for empty rows
         }
 
-        SBAppend( sb , "\x1b[K" , 3 ); // Clear one line at a time
+        AppendToStringBuffer( outputBuffer , "\x1b[K" , 3 ); // Clear line
 
-        if (i < pConsoleWindow->Rows - 1) SBAppend( sb , "\r\n" , 2 );
+        if (i < terminalSize->rows - 1) AppendToStringBuffer( outputBuffer , "\r\n" , 2 );
     }
 }
 
-/*** Cursor Movement ***/
+/*** Cursor Management ***/
 void MoveCursor( int key )
 {
+    WindowSize* terminalSize = GetTerminalSize();
+
     switch (key)
     {
         case ARROW_UP:
             if (cursor.y > 0) cursor.y--;
             break;
         case ARROW_DOWN:
-            cursor.y++;
+            if (cursor.y < terminalSize->rows - 1) cursor.y++;
             break;
         case ARROW_LEFT:
             if (cursor.x > 0) cursor.x--;
             break;
         case ARROW_RIGHT:
-            cursor.x++;
+            if (cursor.x < terminalSize->columns - 1) cursor.x++;
             break;
     }
 }
 
-void UpdateCursorPosition()
+void UpdateCursor()
 {
-    // Move the console cursor to the new position
-    HANDLE hConsole = GetStdHandle( STD_OUTPUT_HANDLE );
+    HANDLE outputHandle = GetStdHandle( STD_OUTPUT_HANDLE );
     COORD position = { cursor.x, cursor.y };
-    SetConsoleCursorPosition( hConsole , position );
+    SetConsoleCursorPosition( outputHandle , position );
 }
