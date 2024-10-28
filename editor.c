@@ -39,7 +39,10 @@ enum editorKey
     ARROW_UP ,
     ARROW_DOWN ,
     PAGE_UP ,
-    PAGE_DOWN
+    PAGE_DOWN ,
+    HOME_KEY ,
+    END_KEY ,
+    DELETE_KEY
 };
 
 /*** Global Variables ***/
@@ -135,6 +138,9 @@ int ReadKeyInput()
                 case VK_DOWN: return ARROW_DOWN;
                 case VK_PRIOR: return PAGE_UP;
                 case VK_NEXT: return PAGE_DOWN;
+                case VK_HOME: return HOME_KEY;
+                case VK_END: return END_KEY;
+                case VK_DELETE: return DELETE_KEY;
                 default: return inputRecord.Event.KeyEvent.uChar.AsciiChar;
             }
         }
@@ -159,6 +165,8 @@ WindowSize* GetTerminalSize()
 /*** Key Press Processing ***/
 void ProcessKeypress()
 {
+    WindowSize* terminalSize = GetTerminalSize();
+
     int key = ReadKeyInput();
     switch (key)
     {
@@ -167,9 +175,25 @@ void ProcessKeypress()
             exit( 0 ); // Exit on Ctrl-Q
             break;
 
+        case HOME_KEY:
+            cursor.x = 0; // Move to the start of the row
+            break;
+
+        case END_KEY:
+            cursor.x = terminalSize->columns - 1; // Move cursor to the end of the row
+            break;
+
         case PAGE_UP:
         case PAGE_DOWN:
-            PageUPAndDownMovement( key );
+            {
+                int rows = terminalSize->rows;
+
+                while (rows--)
+                {
+                    // Move the cursor to the top and bottom of the terminal window
+                    MoveCursor( key == PAGE_UP ? ARROW_UP : ARROW_DOWN );
+                }
+            }
             break;
 
         case ARROW_UP:
@@ -289,19 +313,6 @@ void MoveCursor( int key )
         case ARROW_RIGHT:
             if (cursor.x < terminalSize->columns - 1) cursor.x++;
             break;
-    }
-}
-
-void PageUPAndDownMovement( int key )
-{
-    WindowSize* terminalSize = GetTerminalSize();
-
-    int rows = terminalSize->rows;
-
-    // Loop through
-    while (rows--)
-    {
-        MoveCursor( key == PAGE_UP ? ARROW_UP : ARROW_DOWN );
     }
 }
 
