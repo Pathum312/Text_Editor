@@ -31,6 +31,12 @@ typedef struct
     int y; // Cursor position on the y-axis
 } CursorPosition;
 
+typedef struct
+{
+    int size;
+    char* value;
+} TextRow;
+
 /*** Key Definitions for Editor Navigation ***/
 enum editorKey
 {
@@ -46,31 +52,36 @@ enum editorKey
 };
 
 /*** Global Variables ***/
+int numOfRows;
+TextRow textRow;
 HANDLE inputHandle;
-StringBuffer* outputBuffer;
 CursorPosition cursor;
 DWORD originalConsoleMode;
+StringBuffer* outputBuffer;
 
 /*** Function Prototypes ***/
-void InitializeEditor();
 int ReadKeyInput();
+void UpdateCursor();
+void DrawEditorRows();
+void ProcessKeypress();
+void InitializeEditor();
 void EnableRawInputMode();
 void DisableRawInputMode();
-void DrawEditorRows();
 void MoveCursor( int key );
 void RefreshEditorScreen();
-void UpdateCursor();
 WindowSize* GetTerminalSize();
-void ProcessKeypress();
+void EditorOpen( char* filename );
 void FreeStringBuffer( StringBuffer* buffer );
 void HandleFatalError( const char* errorMessage );
+ssize_t getline( char** lineptr , size_t* n , FILE* stream );
 void AppendToStringBuffer( StringBuffer* buffer , const char* str , int length );
 
 /*** Editor Initialization ***/
-int main()
+int main( int argc , char* argv[] )
 {
     EnableRawInputMode(); // Enables raw mode to disable typical terminal behavior
     InitializeEditor();   // Sets initial editor state, e.g., cursor position
+    if (argc >= 2) EditorOpen( argv[1] );
 
     while (1)
     {
@@ -86,6 +97,9 @@ void InitializeEditor()
     // Start cursor at the top-left corner
     cursor.x = 0;
     cursor.y = 0;
+
+    // Terminal defaults
+    numOfRows = 0;
 }
 
 /*** Terminal Input Handling ***/
@@ -160,6 +174,38 @@ WindowSize* GetTerminalSize()
     }
 
     return terminalSize;
+}
+
+/*** File I/O ***/
+void EditorOpen( char* filename )
+{
+    FILE* fp = fopen( filename , "r" );
+
+    if (!fp) HandleFatalError( "Failed to open file" );
+
+    char* line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen = 0;
+
+    // Read each line from the file
+    while (( linelen = getline( &line , &linecap , fp ) ) != -1)
+    {
+        while (linelen > 0 && ( line[linelen - 1] == '\n' || line[linelen - 1] == '\r' ))
+            linelen--;  // Trim newline or carriage return at the end
+
+        textRow.size = linelen;
+        textRow.value = malloc( linelen + 1 );
+
+        if (textRow.value == NULL) HandleFatalError( "Failed to allocate memory for line" );
+
+        memcpy( textRow.value , line , linelen );
+
+        textRow.value[linelen] = '\0';
+        numOfRows = 1;
+    }
+
+    free( line );
+    fclose( fp );
 }
 
 /*** Key Press Processing ***/
@@ -258,34 +304,45 @@ void DrawEditorRows()
 
     for (int i = 0; i < terminalSize->rows; i++)
     {
-        if (i == terminalSize->rows / 3)
+        if (i >= terminalSize->rows)
         {
-            char welcome[80];
-
-            int welcomeLength = snprintf(
-                welcome ,
-                sizeof( welcome ) ,
-                "Pinkz Editor -- Version %s" ,
-                EDITOR_VERSION
-            );
-
-            if (welcomeLength > terminalSize->columns) welcomeLength = terminalSize->columns;
-
-            int padding = ( terminalSize->columns - welcomeLength ) / 2;
-
-            if (padding)
+            if (i == terminalSize->rows / 3)
             {
-                AppendToStringBuffer( outputBuffer , "~" , 1 );
-                padding--;
+                char welcome[80];
+
+                int welcomeLength = snprintf(
+                    welcome ,
+                    sizeof( welcome ) ,
+                    "Pinkz Editor -- Version %s" ,
+                    EDITOR_VERSION
+                );
+
+                if (welcomeLength > terminalSize->columns) welcomeLength = terminalSize->columns;
+
+                int padding = ( terminalSize->columns - welcomeLength ) / 2;
+
+                if (padding)
+                {
+                    AppendToStringBuffer( outputBuffer , "~" , 1 );
+                    padding--;
+                }
+
+                while (padding--) AppendToStringBuffer( outputBuffer , " " , 1 );
+
+                AppendToStringBuffer( outputBuffer , welcome , welcomeLength );
             }
-
-            while (padding--) AppendToStringBuffer( outputBuffer , " " , 1 );
-
-            AppendToStringBuffer( outputBuffer , welcome , welcomeLength );
+            else
+            {
+                AppendToStringBuffer( outputBuffer , "~" , 1 ); // Add filler for empty rows
+            }
         }
         else
         {
-            AppendToStringBuffer( outputBuffer , "~" , 1 ); // Add filler for empty rows
+            int len = textRow.size;
+
+            if (len > terminalSize->columns) len = terminalSize->columns;
+
+            AppendToStringBuffer( outputBuffer , textRow.value , len );
         }
 
         AppendToStringBuffer( outputBuffer , "\x1b[K" , 3 ); // Clear line
@@ -321,4 +378,38 @@ void UpdateCursor()
     HANDLE outputHandle = GetStdHandle( STD_OUTPUT_HANDLE );
     COORD position = { cursor.x, cursor.y };
     SetConsoleCursorPosition( outputHandle , position );
+}
+
+/*** Read lines from a file ***/
+ssize_t getline( char** lineptr , size_t* n , FILE* stream )
+{
+    if (*lineptr == NULL || *n == 0)
+    {
+        *n = 128;  // Starting buffer size
+        *lineptr = malloc( *n );
+        if (*lineptr == NULL) return -1;
+    }
+
+    char* ptr = *lineptr;
+    int c;
+    size_t i = 0;
+
+    while (( c = fgetc( stream ) ) != EOF && c != '\n')
+    {
+        if (i + 1 >= *n)
+        {
+            *n *= 2;
+            char* new_ptr = realloc( *lineptr , *n );
+            if (new_ptr == NULL) return -1;
+            *lineptr = new_ptr;
+            ptr = *lineptr + i;
+        }
+        *ptr++ = (char) c;
+        i++;
+    }
+
+    if (i == 0 && c == EOF) return -1;
+
+    *ptr = '\0';
+    return i;
 }
