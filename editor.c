@@ -12,6 +12,10 @@
 #define CTRL_KEY(k) ((k) & 0x1f) // Mask to identify Ctrl + key combinations
 #define STR_BUFFER_INIT {NULL, 0} // Initial empty buffer configuration
 
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+#define _DEFAULT_SOURCE
+
 /*** Structs ***/
 typedef struct
 {
@@ -37,6 +41,16 @@ typedef struct
     char* value;
 } TextRow;
 
+typedef struct
+{
+    int numOfRows;
+    TextRow textRow;
+    HANDLE inputHandle;
+    CursorPosition cursor;
+    DWORD originalConsoleMode;
+    StringBuffer* outputBuffer;
+} EditorConfig;
+
 /*** Key Definitions for Editor Navigation ***/
 enum editorKey
 {
@@ -52,12 +66,7 @@ enum editorKey
 };
 
 /*** Global Variables ***/
-int numOfRows;
-TextRow textRow;
-HANDLE inputHandle;
-CursorPosition cursor;
-DWORD originalConsoleMode;
-StringBuffer* outputBuffer;
+EditorConfig config;
 
 /*** Function Prototypes ***/
 int ReadKeyInput();
@@ -95,36 +104,36 @@ int main( int argc , char* argv[] )
 void InitializeEditor()
 {
     // Start cursor at the top-left corner
-    cursor.x = 0;
-    cursor.y = 0;
+    config.cursor.x = 0;
+    config.cursor.y = 0;
 
     // Terminal defaults
-    numOfRows = 0;
+    config.numOfRows = 0;
 }
 
 /*** Terminal Input Handling ***/
 void EnableRawInputMode()
 {
-    inputHandle = GetStdHandle( STD_INPUT_HANDLE );
+    config.inputHandle = GetStdHandle( STD_INPUT_HANDLE );
     DWORD newConsoleMode;
 
     // Save the original console mode for restoration
-    GetConsoleMode( inputHandle , &originalConsoleMode );
+    GetConsoleMode( config.inputHandle , &config.originalConsoleMode );
     atexit( DisableRawInputMode ); // Ensure raw mode is disabled on exit
 
-    newConsoleMode = originalConsoleMode;
+    newConsoleMode = config.originalConsoleMode;
 
     // Configure raw mode by disabling console features
     newConsoleMode &= ~( ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_PROCESSED_OUTPUT );
 
     // Apply the new console mode
-    if (!SetConsoleMode( inputHandle , newConsoleMode )) HandleFatalError( "EnableRawInputMode" );
+    if (!SetConsoleMode( config.inputHandle , newConsoleMode )) HandleFatalError( "EnableRawInputMode" );
 }
 
 void DisableRawInputMode()
 {
     // Restore the original console mode
-    if (!SetConsoleMode( inputHandle , originalConsoleMode )) HandleFatalError( "DisableRawInputMode" );
+    if (!SetConsoleMode( config.inputHandle , config.originalConsoleMode )) HandleFatalError( "DisableRawInputMode" );
 }
 
 void HandleFatalError( const char* errorMessage )
@@ -141,7 +150,7 @@ int ReadKeyInput()
 
     while (1)
     {
-        ReadConsoleInput( inputHandle , &inputRecord , 1 , &eventCount );
+        ReadConsoleInput( config.inputHandle , &inputRecord , 1 , &eventCount );
         if (inputRecord.EventType == KEY_EVENT && inputRecord.Event.KeyEvent.bKeyDown)
         {
             switch (inputRecord.Event.KeyEvent.wVirtualKeyCode)
@@ -193,15 +202,15 @@ void EditorOpen( char* filename )
         while (linelen > 0 && ( line[linelen - 1] == '\n' || line[linelen - 1] == '\r' ))
             linelen--;  // Trim newline or carriage return at the end
 
-        textRow.size = linelen;
-        textRow.value = malloc( linelen + 1 );
+        config.textRow.size = linelen;
+        config.textRow.value = malloc( linelen + 1 );
 
-        if (textRow.value == NULL) HandleFatalError( "Failed to allocate memory for line" );
+        if (config.textRow.value == NULL) HandleFatalError( "Failed to allocate memory for line" );
 
-        memcpy( textRow.value , line , linelen );
+        memcpy( config.textRow.value , line , linelen );
 
-        textRow.value[linelen] = '\0';
-        numOfRows = 1;
+        config.textRow.value[linelen] = '\0';
+        config.numOfRows = 1;
     }
 
     free( line );
@@ -222,11 +231,11 @@ void ProcessKeypress()
             break;
 
         case HOME_KEY:
-            cursor.x = 0; // Move to the start of the row
+            config.cursor.x = 0; // Move to the start of the row
             break;
 
         case END_KEY:
-            cursor.x = terminalSize->columns - 1; // Move cursor to the end of the row
+            config.cursor.x = terminalSize->columns - 1; // Move cursor to the end of the row
             break;
 
         case PAGE_UP:
@@ -271,18 +280,18 @@ void FreeStringBuffer( StringBuffer* buffer )
 /*** Screen Rendering ***/
 void ResetCursorPosition()
 {
-    AppendToStringBuffer( outputBuffer , "\x1b[H" , 3 ); // Move cursor to top-left
+    AppendToStringBuffer( config.outputBuffer , "\x1b[H" , 3 ); // Move cursor to top-left
 }
 
 void HideCursor()
 {
-    AppendToStringBuffer( outputBuffer , "\x1b[?25h" , 6 ); // Make cursor invisible
+    AppendToStringBuffer( config.outputBuffer , "\x1b[?25h" , 6 ); // Make cursor invisible
 }
 
 void RefreshEditorScreen()
 {
     StringBuffer buffer = STR_BUFFER_INIT;
-    outputBuffer = &buffer;
+    config.outputBuffer = &buffer;
 
     HideCursor();
     ResetCursorPosition();
@@ -292,8 +301,8 @@ void RefreshEditorScreen()
     ResetCursorPosition();
     HideCursor();
 
-    write( STDOUT_FILENO , outputBuffer->buffer , outputBuffer->length );
-    FreeStringBuffer( outputBuffer );
+    write( STDOUT_FILENO , config.outputBuffer->buffer , config.outputBuffer->length );
+    FreeStringBuffer( config.outputBuffer );
 
     UpdateCursor(); // Update terminal cursor position
 }
@@ -306,7 +315,7 @@ void DrawEditorRows()
     {
         if (i >= terminalSize->rows)
         {
-            if (i == terminalSize->rows / 3)
+            if (terminalSize->rows == 0 && i == terminalSize->rows / 3)
             {
                 char welcome[80];
 
@@ -323,31 +332,31 @@ void DrawEditorRows()
 
                 if (padding)
                 {
-                    AppendToStringBuffer( outputBuffer , "~" , 1 );
+                    AppendToStringBuffer( config.outputBuffer , "~" , 1 );
                     padding--;
                 }
 
-                while (padding--) AppendToStringBuffer( outputBuffer , " " , 1 );
+                while (padding--) AppendToStringBuffer( config.outputBuffer , " " , 1 );
 
-                AppendToStringBuffer( outputBuffer , welcome , welcomeLength );
+                AppendToStringBuffer( config.outputBuffer , welcome , welcomeLength );
             }
             else
             {
-                AppendToStringBuffer( outputBuffer , "~" , 1 ); // Add filler for empty rows
+                AppendToStringBuffer( config.outputBuffer , "~" , 1 ); // Add filler for empty rows
             }
         }
         else
         {
-            int len = textRow.size;
+            int len = config.textRow.size;
 
             if (len > terminalSize->columns) len = terminalSize->columns;
 
-            AppendToStringBuffer( outputBuffer , textRow.value , len );
+            AppendToStringBuffer( config.outputBuffer , config.textRow.value , len );
         }
 
-        AppendToStringBuffer( outputBuffer , "\x1b[K" , 3 ); // Clear line
+        AppendToStringBuffer( config.outputBuffer , "\x1b[K" , 3 ); // Clear line
 
-        if (i < terminalSize->rows - 1) AppendToStringBuffer( outputBuffer , "\r\n" , 2 );
+        if (i < terminalSize->rows - 1) AppendToStringBuffer( config.outputBuffer , "\r\n" , 2 );
     }
 }
 
@@ -359,16 +368,16 @@ void MoveCursor( int key )
     switch (key)
     {
         case ARROW_UP:
-            if (cursor.y > 0) cursor.y--;
+            if (config.cursor.y > 0) config.cursor.y--;
             break;
         case ARROW_DOWN:
-            if (cursor.y < terminalSize->rows - 1) cursor.y++;
+            if (config.cursor.y < terminalSize->rows - 1) config.cursor.y++;
             break;
         case ARROW_LEFT:
-            if (cursor.x > 0) cursor.x--;
+            if (config.cursor.x > 0) config.cursor.x--;
             break;
         case ARROW_RIGHT:
-            if (cursor.x < terminalSize->columns - 1) cursor.x++;
+            if (config.cursor.x < terminalSize->columns - 1) config.cursor.x++;
             break;
     }
 }
@@ -376,7 +385,7 @@ void MoveCursor( int key )
 void UpdateCursor()
 {
     HANDLE outputHandle = GetStdHandle( STD_OUTPUT_HANDLE );
-    COORD position = { cursor.x, cursor.y };
+    COORD position = { config.cursor.x, config.cursor.y };
     SetConsoleCursorPosition( outputHandle , position );
 }
 
